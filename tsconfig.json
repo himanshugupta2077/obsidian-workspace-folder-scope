@@ -1,0 +1,17 @@
+{
+	"compilerOptions": {
+		"baseUrl": "src",
+		"module": "ESNext",
+		"target": "ES2021",
+		"moduleResolution": "node",
+		"isolatedModules": true,
+		"strict": true,
+		"noUnusedLocals": true,
+		"useUnknownInCatchVariables": true,
+		"allowSyntheticDefaultImports": true,
+		
+		"lib": ["DOM", "ES2021", "DOM.Iterable"]
+	},
+	"include": ["src/**/*.ts"],
+	"exclude": ["src/**/*.test.ts"]
+}

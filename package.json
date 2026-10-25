@@ -1,0 +1,32 @@
+{
+	"name": "obsidian-workspace-folder-scope",
+	"version": "1.0.0",
+	"description": "Scope the file explorer to one folder per Obsidian workspace.",
+	"main": "main.js",
+	"type": "module",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"lint": "eslint ."
+	},
+	"keywords": [
+		"obsidian",
+		"plugin",
+		"file explorer",
+		"workspaces"
+	],
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/himanshugupta2077/obsidian-workspace-folder-scope.git"
+	},
+	"devDependencies": {
+		"esbuild": "0.25.5",
+		"eslint": "^9.39.5",
+		"eslint-plugin-obsidianmd": "^0.4.2",
+		"obsidian": "latest",
+		"tslib": "2.4.0",
+		"typescript": "^5.8.3",
+		"typescript-eslint": "^8.72.0"
+	}
+}

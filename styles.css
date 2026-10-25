@@ -1,0 +1,17 @@
+/* Folders from the vault root down to the scope folder ("chain" folders) lose their own row and
+   their indentation, and everything beside them is hidden, so the scope folder's contents sit at
+   the top level of the explorer. */
+body.workspace-folder-scope-active .nav-files-container > div > .tree-item:not(.workspace-folder-scope-chain),
+body.workspace-folder-scope-active .workspace-folder-scope-ancestor > .tree-item-children > .tree-item:not(.workspace-folder-scope-chain) {
+	display: none;
+}
+
+body.workspace-folder-scope-active .workspace-folder-scope-chain > .tree-item-self {
+	display: none;
+}
+
+body.workspace-folder-scope-active .workspace-folder-scope-chain > .tree-item-children {
+	padding-inline-start: 0;
+	margin-inline-start: 0;
+	border-inline-start: none;
+}
