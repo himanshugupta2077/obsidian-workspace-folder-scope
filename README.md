@@ -15,7 +15,9 @@ Workspaces Plus puts its switcher in the status bar, which phones don't have. On
 
 On mobile, switching loads only the workspace's tabs. Workspaces are usually saved on the desktop, whose sidebars don't fit the phone's drawers; loading one whole would leave the drawers empty. The folder scope follows the switch.
 
-Saved workspaces sync to every device, so by default this plugin also blocks saving a workspace on mobile. Otherwise Workspaces Plus's "Auto save the current workspace on layout change" writes the phone's layout over the one you saved on your computer. Turn **Don't let mobile overwrite saved workspaces** off in settings if you want to save from the phone.
+The phone remembers its own tabs for each workspace. Switching to a workspace opens whichever is newer: the tabs this phone last had there, or the layout last saved on your computer. Saved layouts are re-read from disk on each switch, because Obsidian only reads them at launch and Sync may have brought a newer one since.
+
+Saved workspaces sync to every device, so by default the phone never writes them. Otherwise Workspaces Plus's "Auto save the current workspace on layout change", or just recording which workspace is active, writes the phone's (possibly out-of-date) copy over the one your computer saved. Turn **Don't let mobile overwrite saved workspaces** off in settings if you want to save from the phone.
 
 ## Hide files and folders
 

@@ -38,6 +38,21 @@ interface WorkspacesInstance {
 	loadWorkspace?(name: string): void;
 	setActiveWorkspace?(name: string): void;
 	saveWorkspace?(name: string, ...rest: unknown[]): unknown;
+	saveData?(): unknown;
+}
+
+interface SavedWorkspace {
+	main?: unknown;
+	active?: string;
+	/** When it was last saved, e.g. "2026-10-25T16:40:13+05:30". */
+	mtime?: string;
+}
+
+/** A workspace's tabs as this phone last left them, kept in the phone's local storage. */
+interface MobileSnapshot {
+	main: unknown;
+	active?: string;
+	ts: number;
 }
 
 interface FileManagerInternals {
@@ -57,6 +72,7 @@ const ANCESTOR_CLASS = "workspace-folder-scope-ancestor";
 const HIDDEN_CLASS = "workspace-folder-scope-hidden";
 const SHOW_HIDDEN_CLASS = "workspace-folder-scope-show-hidden";
 const SWITCHER_CLASS = "workspace-folder-scope-switcher";
+const SNAPSHOTS_KEY = "workspace-folder-scope-mobile-layouts";
 
 export default class WorkspaceFolderScopePlugin extends Plugin {
 	settings: Settings = DEFAULT_SETTINGS;
@@ -117,7 +133,8 @@ export default class WorkspaceFolderScopePlugin extends Plugin {
 		});
 		if (Platform.isMobile) {
 			this.addRibbonIcon("layout-dashboard", "Switch workspace", (evt) => this.openSwitcher(evt));
-			this.app.workspace.onLayoutReady(() => this.guardMobileAutoSave());
+			// Before layout-ready, when Workspaces Plus records the phone's active workspace.
+			this.guardMobileAutoSave();
 			this.register(() => document.querySelectorAll(`.${SWITCHER_CLASS}`).forEach((el) => el.remove()));
 		}
 
@@ -186,21 +203,59 @@ export default class WorkspaceFolderScopePlugin extends Plugin {
 	async switchWorkspace(name: string) {
 		const workspaces = this.workspacesPlugin();
 		if (!workspaces?.loadWorkspace || name === this.activeWorkspace()) return;
-		const saved = workspaces.workspaces?.[name] as { main?: unknown; active?: string } | undefined;
-		if (!Platform.isMobile || !saved?.main) {
+		if (!Platform.isMobile) {
 			workspaces.loadWorkspace(name);
+			return;
+		}
+
+		// Remember the tabs being left, so switching back restores them even though the phone never saves.
+		const layout = this.app.workspace.getLayout() as { main?: unknown; active?: string };
+		const snapshots = this.loadSnapshots();
+		const leaving = this.activeWorkspace();
+		if (leaving && layout.main) {
+			snapshots[leaving] = { main: layout.main, active: layout.active, ts: Date.now() };
+			this.app.saveLocalStorage(SNAPSHOTS_KEY, snapshots);
+		}
+
+		// Obsidian reads workspaces.json once at launch and never again, so a layout the desktop saved
+		// since then (delivered by Sync) is only on disk. Read it fresh.
+		await this.reloadSavedWorkspaces();
+		const saved = workspaces.workspaces?.[name] as SavedWorkspace | undefined;
+		const mine = snapshots[name];
+		const savedAt = saved?.mtime ? Date.parse(saved.mtime) : 0;
+		// Whichever is newer: this phone's own tabs in that workspace, or the last save (from the desktop).
+		const source = mine && (!saved?.main || mine.ts > (Number.isNaN(savedAt) ? 0 : savedAt)) ? mine : saved;
+		if (!source?.main) {
+			new Notice(`Workspace "${name}" has no saved tabs.`);
 			return;
 		}
 		// Saved layouts come from the desktop, whose split sidebars don't fit the phone's drawers:
 		// loading one whole leaves the drawers empty (no file explorer). Take only its tabs.
 		// Copied, because the phone rewrites the layout it is given (e.g. merges tab groups) and the
 		// saved workspace would otherwise change with it.
-		const layout = this.app.workspace.getLayout();
-		await this.app.workspace.changeLayout({ ...layout, main: structuredClone(saved.main), active: saved.active });
+		await this.app.workspace.changeLayout({ ...layout, main: structuredClone(source.main), active: source.active });
 		workspaces.setActiveWorkspace?.(name);
 		// Workspaces Plus updates its own state (status, remembered mobile workspace) on this event.
 		this.app.workspace.trigger("workspace-load", name);
 		this.refresh();
+	}
+
+	private loadSnapshots(): Record<string, MobileSnapshot> {
+		const value: unknown = this.app.loadLocalStorage(SNAPSHOTS_KEY);
+		return value && typeof value === "object" ? (value as Record<string, MobileSnapshot>) : {};
+	}
+
+	/** Replaces the core Workspaces plugin's in-memory saved workspaces with what's on disk now. */
+	private async reloadSavedWorkspaces() {
+		const workspaces = this.workspacesPlugin();
+		if (!workspaces) return;
+		try {
+			const path = normalizePath(`${this.app.vault.configDir}/workspaces.json`);
+			const data = JSON.parse(await this.app.vault.adapter.read(path)) as { workspaces?: Record<string, unknown> };
+			if (data.workspaces && typeof data.workspaces === "object") workspaces.workspaces = data.workspaces;
+		} catch (e) {
+			console.warn("workspace-folder-scope: could not re-read saved workspaces", e);
+		}
 	}
 
 	/** On mobile, a bar at the top of each file explorer that names the active workspace and switches it. */
@@ -224,20 +279,26 @@ export default class WorkspaceFolderScopePlugin extends Plugin {
 		}
 	}
 
-	// Saved workspaces sync to every device, so a save on the phone (Workspaces Plus's "auto save
-	// on layout change", or its save-before-switch) writes the phone's layout over the desktop's.
+	// Saved workspaces sync to every device, but the phone's copy in memory is whatever was on disk
+	// when it launched. Any write from the phone (Workspaces Plus's auto save, its save-before-switch,
+	// or just recording the active workspace, which rewrites the whole file) would sync that stale or
+	// phone-shaped copy over the desktop's. So on mobile, the phone never writes workspaces.json.
+	// Workspaces Plus remembers the phone's active workspace in its own settings.
 	private guardMobileAutoSave() {
 		if (!this.settings.guardMobileAutoSave) return;
-		const workspaces = this.workspacesPlugin();
-		const original = workspaces?.saveWorkspace;
-		if (!workspaces || typeof original !== "function") return;
-		const guarded = (name: string) => {
-			console.debug(`workspace-folder-scope: blocked saving workspace "${name}" on mobile`);
-		};
-		workspaces.saveWorkspace = guarded;
-		this.register(() => {
-			if (workspaces.saveWorkspace === guarded) workspaces.saveWorkspace = original;
-		});
+		const workspaces = this.workspacesPlugin() as Record<string, unknown> | null;
+		if (!workspaces) return;
+		for (const method of ["saveWorkspace", "saveData"]) {
+			const original = workspaces[method];
+			if (typeof original !== "function") continue;
+			const guarded = () => {
+				console.debug(`workspace-folder-scope: blocked ${method} of saved workspaces on mobile`);
+			};
+			workspaces[method] = guarded;
+			this.register(() => {
+				if (workspaces[method] === guarded) workspaces[method] = original;
+			});
+		}
 	}
 
 	private resolveScope(): TFolder | null {
@@ -440,7 +501,7 @@ class FolderScopeSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Don't let mobile overwrite saved workspaces")
 			.setDesc(
-				"Saved workspaces sync to all your devices. On mobile, block every save of a workspace so the phone's layout never replaces the one saved on your computer. Switching still works. Takes effect after restarting Obsidian on the phone."
+				"Saved workspaces sync to all your devices. On mobile, never write them, so the phone's layout (or its out-of-date copy) can't replace what your computer saved. Switching still works, and the phone remembers its own tabs per workspace. Takes effect after restarting Obsidian on the phone."
 			)
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.guardMobileAutoSave).onChange(async (value) => {
