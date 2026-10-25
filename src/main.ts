@@ -9,10 +9,13 @@ interface ScopeRule {
 
 interface Settings {
 	rules: ScopeRule[];
+	/** Vault paths of files and folders never shown in the file explorer, in any workspace. */
+	hidden: string[];
 }
 
 const DEFAULT_SETTINGS: Settings = {
 	rules: [],
+	hidden: [],
 };
 
 // Undocumented internals this plugin relies on. Everything is feature-checked before use.
@@ -44,6 +47,8 @@ interface FileManagerInternals {
 const BODY_CLASS = "workspace-folder-scope-active";
 const CHAIN_CLASS = "workspace-folder-scope-chain";
 const ANCESTOR_CLASS = "workspace-folder-scope-ancestor";
+const HIDDEN_CLASS = "workspace-folder-scope-hidden";
+const SHOW_HIDDEN_CLASS = "workspace-folder-scope-show-hidden";
 
 export default class WorkspaceFolderScopePlugin extends Plugin {
 	settings: Settings = DEFAULT_SETTINGS;
@@ -52,12 +57,40 @@ export default class WorkspaceFolderScopePlugin extends Plugin {
 	private scope: TFolder | null = null;
 	/** Chain items whose `setCollapsed` is wrapped so "Collapse all" can't hide the scope. */
 	private pinned = new Set<ExplorerItem>();
-	private requestApply = debounce(() => this.apply(), 100, true);
+	private requestApply = debounce(() => {
+		this.apply();
+		this.applyHidden();
+	}, 100, true);
+	/** Set by the toggle command to show hidden items until the next toggle or restart. */
+	private showHidden = false;
 
 	async onload() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as Partial<Settings> | null);
+		this.settings.hidden = [...(this.settings.hidden ?? [])];
 		this.addSettingTab(new FolderScopeSettingTab(this.app, this));
 		this.patchFileManager();
+
+		this.app.workspace.onLayoutReady(() => this.applyHidden());
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, file, source) => {
+				if (source !== "file-explorer-context-menu" || file.path === "/") return;
+				menu.addItem((item) =>
+					item
+						.setTitle("Hide in file explorer")
+						.setIcon("eye-off")
+						.setSection("action")
+						.onClick(() => void this.setHidden(file.path, true))
+				);
+			})
+		);
+		this.addCommand({
+			id: "toggle-hidden",
+			name: "Toggle hidden files and folders in the file explorer",
+			callback: () => {
+				this.showHidden = !this.showHidden;
+				this.applyHidden();
+			},
+		});
 
 		this.addCommand({
 			id: "toggle",
@@ -71,7 +104,7 @@ export default class WorkspaceFolderScopePlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => this.apply());
 		// Loading a workspace sets the active name before swapping the layout, so layout-change sees it.
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.refresh()));
-		this.registerEvent(this.app.vault.on("create", (file) => file instanceof TFolder && this.refresh()));
+		this.registerEvent(this.app.vault.on("create", (file) => (file instanceof TFolder || this.settings.hidden.includes(file.path)) && this.refresh()));
 		this.registerEvent(this.app.vault.on("delete", (file) => file instanceof TFolder && this.refresh()));
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.onRename(file, oldPath)));
 	}
@@ -79,6 +112,8 @@ export default class WorkspaceFolderScopePlugin extends Plugin {
 	onunload() {
 		this.scope = null;
 		this.clear();
+		document.querySelectorAll(`.${HIDDEN_CLASS}`).forEach((el) => el.removeClass(HIDDEN_CLASS));
+		document.body.removeClass(SHOW_HIDDEN_CLASS);
 	}
 
 	async saveSettings() {
@@ -89,6 +124,7 @@ export default class WorkspaceFolderScopePlugin extends Plugin {
 	/** Applies now, and again once the explorer has finished rebuilding after a layout swap. */
 	private refresh() {
 		this.apply();
+		this.applyHidden();
 		this.requestApply();
 	}
 
@@ -200,8 +236,33 @@ export default class WorkspaceFolderScopePlugin extends Plugin {
 		});
 	}
 
+	async setHidden(path: string, hidden: boolean) {
+		const rest = this.settings.hidden.filter((p) => p !== path);
+		this.settings.hidden = hidden ? [...rest, path] : rest;
+		await this.saveData(this.settings);
+		this.applyHidden();
+	}
+
+	/** Marks each hidden item's explorer row. Re-run whenever the explorer may have rebuilt items. */
+	applyHidden() {
+		document.querySelectorAll(`.${HIDDEN_CLASS}`).forEach((el) => el.removeClass(HIDDEN_CLASS));
+		document.body.toggleClass(SHOW_HIDDEN_CLASS, this.showHidden);
+		for (const leaf of this.app.workspace.getLeavesOfType("file-explorer")) {
+			const view = leaf.view as FileExplorerView;
+			for (const path of this.settings.hidden) view.fileItems?.[path]?.el.addClass(HIDDEN_CLASS);
+			view.tree?.infinityScroll?.invalidateAll();
+		}
+	}
+
 	/** Keeps rules pointing at their folder when it (or a parent) is renamed or moved. */
 	private onRename(file: TAbstractFile, oldPath: string) {
+		const moved = (p: string) => (p === oldPath ? file.path : p.startsWith(oldPath + "/") ? file.path + p.slice(oldPath.length) : p);
+		const hidden = this.settings.hidden.map(moved);
+		if (hidden.some((p, i) => p !== this.settings.hidden[i])) {
+			this.settings.hidden = hidden;
+			void this.saveData(this.settings);
+			this.applyHidden();
+		}
 		if (!(file instanceof TFolder)) return;
 		let changed = false;
 		for (const rule of this.settings.rules) {
@@ -270,5 +331,23 @@ class FolderScopeSettingTab extends PluginSettingTab {
 				this.display();
 			})
 		);
+
+		new Setting(containerEl)
+			.setName("Hidden in file explorer")
+			.setHeading()
+			.setDesc(
+				"Right-click a file or folder and choose Hide in file explorer. Hidden items stay in the vault and in search; they just don't show in the file explorer, in any workspace. The toggle command shows them for a while."
+			);
+		if (this.plugin.settings.hidden.length === 0) {
+			containerEl.createEl("p", { text: "Nothing hidden.", cls: "setting-item-description" });
+		}
+		for (const path of this.plugin.settings.hidden) {
+			new Setting(containerEl).setName(path).addButton((button) =>
+				button.setButtonText("Show").onClick(async () => {
+					await this.plugin.setHidden(path, false);
+					this.display();
+				})
+			);
+		}
 	}
 }

@@ -9,6 +9,10 @@ New notes and folders follow the scope too:
 
 Use the **Toggle folder scope for this workspace** command to temporarily see the whole vault.
 
+## Hide files and folders
+
+Right-click any file or folder and choose **Hide in file explorer** to keep it out of the explorer in every workspace, e.g. a `CLAUDE.md` you need in place but don't want to look at. It stays in the vault, in search and in links; the rule follows it when it's renamed or moved. Unhide items in the plugin settings, or run **Toggle hidden files and folders in the file explorer** to see them for a while.
+
 ## Settings
 
 One rule per workspace: the workspace name and the folder path, e.g. `Work` → `Work/Acme`. Rules follow the folder when it's renamed or moved.

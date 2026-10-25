@@ -1,7 +1,7 @@
 {
 	"id": "workspace-folder-scope",
 	"name": "Workspace Folder Scope",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"minAppVersion": "1.8.7",
 	"description": "Scope the file explorer to one folder per workspace, so its subfolders sit at the top level.",
 	"author": "Himanshu Gupta",

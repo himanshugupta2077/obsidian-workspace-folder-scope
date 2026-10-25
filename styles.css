@@ -15,3 +15,8 @@ body.workspace-folder-scope-active .workspace-folder-scope-chain > .tree-item-ch
 	margin-inline-start: 0;
 	border-inline-start: none;
 }
+
+/* Items on the plugin's hidden list. The toggle command shows them again for a while. */
+body:not(.workspace-folder-scope-show-hidden) .nav-files-container .workspace-folder-scope-hidden {
+	display: none;
+}
