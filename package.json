@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-workspace-folder-scope",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"description": "Scope the file explorer to one folder per Obsidian workspace.",
 	"main": "main.js",
 	"type": "module",

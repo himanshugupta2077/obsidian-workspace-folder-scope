@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, TAbstractFile, TFolder, View, debounce, normalizePath } from "obsidian";
+import { App, Menu, Notice, Platform, Plugin, PluginSettingTab, Setting, TAbstractFile, TFolder, View, debounce, normalizePath, setIcon } from "obsidian";
 
 interface ScopeRule {
 	/** Name of a saved workspace (core Workspaces plugin). */
@@ -11,11 +11,14 @@ interface Settings {
 	rules: ScopeRule[];
 	/** Vault paths of files and folders never shown in the file explorer, in any workspace. */
 	hidden: string[];
+	/** On mobile, stop Workspaces Plus auto-saving this device's layout into the shared saved workspaces. */
+	guardMobileAutoSave: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
 	rules: [],
 	hidden: [],
+	guardMobileAutoSave: true,
 };
 
 // Undocumented internals this plugin relies on. Everything is feature-checked before use.
@@ -31,6 +34,10 @@ interface FileExplorerView extends View {
 
 interface WorkspacesInstance {
 	activeWorkspace?: string;
+	workspaces?: Record<string, unknown>;
+	loadWorkspace?(name: string): void;
+	setActiveWorkspace?(name: string): void;
+	saveWorkspace?(name: string, ...rest: unknown[]): unknown;
 }
 
 interface FileManagerInternals {
@@ -49,6 +56,7 @@ const CHAIN_CLASS = "workspace-folder-scope-chain";
 const ANCESTOR_CLASS = "workspace-folder-scope-ancestor";
 const HIDDEN_CLASS = "workspace-folder-scope-hidden";
 const SHOW_HIDDEN_CLASS = "workspace-folder-scope-show-hidden";
+const SWITCHER_CLASS = "workspace-folder-scope-switcher";
 
 export default class WorkspaceFolderScopePlugin extends Plugin {
 	settings: Settings = DEFAULT_SETTINGS;
@@ -101,6 +109,18 @@ export default class WorkspaceFolderScopePlugin extends Plugin {
 			},
 		});
 
+		// Mobile has no status bar, so Workspaces Plus offers no visible way to switch there.
+		this.addCommand({
+			id: "switch-workspace",
+			name: "Switch workspace",
+			callback: () => this.openSwitcher(),
+		});
+		if (Platform.isMobile) {
+			this.addRibbonIcon("layout-dashboard", "Switch workspace", (evt) => this.openSwitcher(evt));
+			this.app.workspace.onLayoutReady(() => this.guardMobileAutoSave());
+			this.register(() => document.querySelectorAll(`.${SWITCHER_CLASS}`).forEach((el) => el.remove()));
+		}
+
 		this.app.workspace.onLayoutReady(() => this.apply());
 		// Loading a workspace sets the active name before swapping the layout, so layout-change sees it.
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.refresh()));
@@ -123,16 +143,101 @@ export default class WorkspaceFolderScopePlugin extends Plugin {
 
 	/** Applies now, and again once the explorer has finished rebuilding after a layout swap. */
 	private refresh() {
+		this.renderSwitchers();
 		this.apply();
 		this.applyHidden();
 		this.requestApply();
 	}
 
-	private activeWorkspace(): string {
+	private workspacesPlugin(): WorkspacesInstance | null {
 		const plugins = (this.app as App & { internalPlugins?: { getEnabledPluginById?(id: string): unknown } })
 			.internalPlugins;
-		const workspaces = plugins?.getEnabledPluginById?.("workspaces") as WorkspacesInstance | null;
-		return workspaces?.activeWorkspace ?? "";
+		return (plugins?.getEnabledPluginById?.("workspaces") as WorkspacesInstance | null) ?? null;
+	}
+
+	private activeWorkspace(): string {
+		return this.workspacesPlugin()?.activeWorkspace ?? "";
+	}
+
+	/** Lists the saved workspaces (a bottom sheet on mobile) and loads the one picked. */
+	openSwitcher(evt?: MouseEvent) {
+		const workspaces = this.workspacesPlugin();
+		const names = Object.keys(workspaces?.workspaces ?? {});
+		if (!workspaces?.loadWorkspace || names.length === 0) {
+			new Notice("No saved workspaces. Save one with the core Workspaces plugin first.");
+			return;
+		}
+		const active = this.activeWorkspace();
+		const menu = new Menu();
+		for (const name of names) {
+			const scoped = this.settings.rules.some((r) => r.workspace === name && r.folder.trim());
+			menu.addItem((item) =>
+				item
+					.setTitle(name)
+					.setIcon(scoped ? "folder" : "layout-dashboard")
+					.setChecked(name === active)
+					.onClick(() => void this.switchWorkspace(name))
+			);
+		}
+		if (evt) menu.showAtMouseEvent(evt);
+		else menu.showAtPosition({ x: window.innerWidth / 2, y: window.innerHeight / 3 });
+	}
+
+	async switchWorkspace(name: string) {
+		const workspaces = this.workspacesPlugin();
+		if (!workspaces?.loadWorkspace || name === this.activeWorkspace()) return;
+		const saved = workspaces.workspaces?.[name] as { main?: unknown; active?: string } | undefined;
+		if (!Platform.isMobile || !saved?.main) {
+			workspaces.loadWorkspace(name);
+			return;
+		}
+		// Saved layouts come from the desktop, whose split sidebars don't fit the phone's drawers:
+		// loading one whole leaves the drawers empty (no file explorer). Take only its tabs.
+		// Copied, because the phone rewrites the layout it is given (e.g. merges tab groups) and the
+		// saved workspace would otherwise change with it.
+		const layout = this.app.workspace.getLayout();
+		await this.app.workspace.changeLayout({ ...layout, main: structuredClone(saved.main), active: saved.active });
+		workspaces.setActiveWorkspace?.(name);
+		// Workspaces Plus updates its own state (status, remembered mobile workspace) on this event.
+		this.app.workspace.trigger("workspace-load", name);
+		this.refresh();
+	}
+
+	/** On mobile, a bar at the top of each file explorer that names the active workspace and switches it. */
+	private renderSwitchers() {
+		if (!Platform.isMobile) return;
+		const name = this.activeWorkspace() || "No workspace";
+		for (const leaf of this.app.workspace.getLeavesOfType("file-explorer")) {
+			const container = leaf.view.containerEl;
+			let bar = container.querySelector<HTMLElement>(`:scope > .${SWITCHER_CLASS}`);
+			if (!bar) {
+				bar = createDiv({ cls: SWITCHER_CLASS, attr: { role: "button", "aria-label": "Switch workspace" } });
+				container.prepend(bar);
+				bar.addEventListener("click", (evt) => this.openSwitcher(evt));
+			}
+			if (bar.dataset.workspace === name) continue;
+			bar.dataset.workspace = name;
+			bar.empty();
+			setIcon(bar.createSpan({ cls: `${SWITCHER_CLASS}-icon` }), "layout-dashboard");
+			bar.createSpan({ cls: `${SWITCHER_CLASS}-name`, text: name });
+			setIcon(bar.createSpan({ cls: `${SWITCHER_CLASS}-chevron` }), "chevrons-up-down");
+		}
+	}
+
+	// Saved workspaces sync to every device, so a save on the phone (Workspaces Plus's "auto save
+	// on layout change", or its save-before-switch) writes the phone's layout over the desktop's.
+	private guardMobileAutoSave() {
+		if (!this.settings.guardMobileAutoSave) return;
+		const workspaces = this.workspacesPlugin();
+		const original = workspaces?.saveWorkspace;
+		if (!workspaces || typeof original !== "function") return;
+		const guarded = (name: string) => {
+			console.debug(`workspace-folder-scope: blocked saving workspace "${name}" on mobile`);
+		};
+		workspaces.saveWorkspace = guarded;
+		this.register(() => {
+			if (workspaces.saveWorkspace === guarded) workspaces.saveWorkspace = original;
+		});
 	}
 
 	private resolveScope(): TFolder | null {
@@ -331,6 +436,18 @@ class FolderScopeSettingTab extends PluginSettingTab {
 				this.display();
 			})
 		);
+
+		new Setting(containerEl)
+			.setName("Don't let mobile overwrite saved workspaces")
+			.setDesc(
+				"Saved workspaces sync to all your devices. On mobile, block every save of a workspace so the phone's layout never replaces the one saved on your computer. Switching still works. Takes effect after restarting Obsidian on the phone."
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.guardMobileAutoSave).onChange(async (value) => {
+					this.plugin.settings.guardMobileAutoSave = value;
+					await this.plugin.saveSettings();
+				})
+			);
 
 		new Setting(containerEl)
 			.setName("Hidden in file explorer")

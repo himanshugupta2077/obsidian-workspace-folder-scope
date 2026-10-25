@@ -20,3 +20,30 @@ body.workspace-folder-scope-active .workspace-folder-scope-chain > .tree-item-ch
 body:not(.workspace-folder-scope-show-hidden) .nav-files-container .workspace-folder-scope-hidden {
 	display: none;
 }
+
+/* Mobile workspace switcher at the top of the file explorer. */
+.workspace-folder-scope-switcher {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	margin: var(--size-4-2) var(--size-4-3) var(--size-4-1);
+	padding: var(--size-4-2) var(--size-4-3);
+	border-radius: var(--radius-m);
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
+	cursor: var(--cursor);
+}
+
+.workspace-folder-scope-switcher-icon,
+.workspace-folder-scope-switcher-chevron {
+	display: flex;
+	color: var(--text-muted);
+}
+
+.workspace-folder-scope-switcher-name {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
